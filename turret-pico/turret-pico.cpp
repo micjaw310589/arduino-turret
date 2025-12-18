@@ -61,6 +61,8 @@ int pos_sensor_ver = 90;
 int pos_gun_hor = 90;
 int pos_gun_ver = 90;
 
+bool horizontalDirection = true; // true - prawo, false - lewo
+
 int maximumRange = 200;
 int minimumRange = 20;
 float distance;
@@ -73,7 +75,7 @@ enum class RotateDir {
 // Funkcja pomocnicza do odczytu czasu impulsu (zamiennik pulseIn)
 uint64_t get_pulse_width(uint pin) {
     // Czekaj na stan wysoki (z timeoutem 100ms)
-    absolute_time_t timeout = make_timeout_time_ms(100);
+    absolute_time_t timeout = make_timeout_time_ms(30);
     while (gpio_get(pin) == 0) {
         if (absolute_time_diff_us(get_absolute_time(), timeout) < 0) return 0;
     }
@@ -124,9 +126,13 @@ int main() {
 
     // Ustawienie pozycji początkowych
     servo_sensor_hor.write(pos_sensor_hor);
+    sleep_ms(300);
     servo_sensor_ver.write(pos_sensor_ver);
+    sleep_ms(300);
     servo_gun_hor.write(pos_gun_hor);
+    sleep_ms(300);
     servo_gun_ver.write(pos_gun_ver);
+    sleep_ms(300);
 
     // Pętla główna (loop)
     while (true) {
@@ -160,8 +166,19 @@ int main() {
         // Delay 500ms
         sleep_ms(500);
 
-        // Rotate servo sensor 1 forward
-        rotate_servo(servo_sensor_hor, pos_sensor_hor, RotateDir::FORWARD);
+        // rotate servo sensor horizontally back and forth
+        if (horizontalDirection) {
+            rotate_servo(servo_sensor_hor, pos_sensor_hor, RotateDir::FORWARD);
+            if (pos_sensor_hor >= 150) {
+                horizontalDirection = false;
+            }
+        } else {
+            rotate_servo(servo_sensor_hor, pos_sensor_hor, RotateDir::BACKWARD);
+            if (pos_sensor_hor <= 30) {
+                horizontalDirection = true;
+            }
+        }
+
         sleep_ms(15); // waits for the servo to reach the position
     }
     
