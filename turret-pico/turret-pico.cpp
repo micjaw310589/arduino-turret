@@ -1,8 +1,10 @@
 #include <stdio.h>
+#include <random>
 #include "pico/stdlib.h"
 #include "hardware/pwm.h"
 #include "hardware/gpio.h"
 #include "hardware/clocks.h"
+#include "hardware/structs/rosc.h"
 
 // Definicje Pinów
 #define ECHO_PIN 6
@@ -14,6 +16,7 @@
 #define SERVO_GUN_HOR_PIN 4
 #define SERVO_GUN_VER_PIN 5
 #define BUZZER_PIN 9
+#define BUTTON_PIN 10
 
 // --- Klasa pomocnicza dla Serwomechanizmów (zamiast Servo.h) ---
 class PicoServo {
@@ -56,6 +59,11 @@ PicoServo servo_gun_hor;
 PicoServo servo_gun_ver;
 
 // Zmienne pozycji
+const int MIN_HOR_ANGLE = 30;
+const int MAX_HOR_ANGLE = 150;
+const int MIN_VER_ANGLE = 80;
+const int MAX_VER_ANGLE = 120;
+
 int pos_sensor_hor = 90;
 int pos_sensor_ver = 90;
 int pos_gun_hor = 90;
@@ -69,15 +77,15 @@ int minimumRange = 20;
 float distance;
 
 // Mapa odległości [ver][hor] dla kątów 0-180 (indeks = kąt/10)
-float distanceMap[181][181]; 
+const int VER_SIZE = 41;
+const int HOR_SIZE = 121;
+float distanceMap[VER_SIZE][HOR_SIZE] = {999999.0f};
 
-void fire_at_target(int ver_idx, int hor_idx) {
-    int angle_ver = ver_idx;
-    int angle_hor = hor_idx;
+void fire_at_target(const int ver_idx, const int hor_idx) {
+    // int angle_ver = ver_idx;
+    // int angle_hor = hor_idx;
 
-    // Wycelowanie
-    servo_gun_ver.write(angle_ver);
-    servo_gun_hor.write(angle_hor);
+    sleep_ms(15);
     
     // Symulacja strzału
     gpio_put(LASER_PIN, 1);
@@ -105,9 +113,29 @@ uint64_t get_pulse_width(uint pin) {
     return absolute_time_diff_us(start_time, end_time);
 }
 
+// This function uses the hardware to create a unique seed
+void seed_random_from_rosc() {
+    uint32_t random = 0;
+    volatile uint32_t *rnd_reg = (uint32_t *)(ROSC_BASE + ROSC_RANDOMBIT_OFFSET);
+    
+    // Mix bits from the hardware random generator
+    for (int i = 0; i < 32; i++) {
+        random = (random << 1) | (*rnd_reg & 1);
+    }
+    srand(random); // Initialize the standard random number generator
+}
+
+void random_deg_pos(int &ver_pos_deg, int &hor_pos_deg) {
+    ver_pos_deg = rand() % (MAX_VER_ANGLE - MIN_VER_ANGLE + 1) + MIN_VER_ANGLE;
+    hor_pos_deg = rand() % (MAX_HOR_ANGLE - MIN_HOR_ANGLE + 1) + MIN_HOR_ANGLE;
+}
+
 int main() {
     // Inicjalizacja Serial (USB)
     stdio_init_all();
+
+    // Inicjalizacja rng
+    seed_random_from_rosc();
 
     // Konfiguracja pinów
     gpio_init(TRIG_PIN);
@@ -123,6 +151,10 @@ int main() {
     gpio_set_dir(LASER_PIN, GPIO_OUT);
     gpio_init(BUZZER_PIN);
     gpio_set_dir(BUZZER_PIN, GPIO_OUT);
+
+    gpio_init(BUTTON_PIN);
+    gpio_set_dir(BUTTON_PIN, GPIO_IN);
+    gpio_pull_up(BUTTON_PIN);
 
     // Podłączenie serw
     servo_sensor_hor.attach(SERVO_SENSOR_HOR_PIN);
@@ -170,10 +202,10 @@ int main() {
         }
 
         // Zapis do tablicy
-        int v_idx = pos_sensor_ver;
-        int h_idx = pos_sensor_hor;
-        if (v_idx >= 0 && v_idx <= 180 && h_idx >= 0 && h_idx <= 180) {
-             distanceMap[v_idx][h_idx] = distance;
+        int v_idx = pos_sensor_ver - MIN_VER_ANGLE;
+        int h_idx = pos_sensor_hor - MIN_HOR_ANGLE;
+        if (v_idx >= 0 && v_idx <= VER_SIZE-1 && h_idx >= 0 && h_idx <= HOR_SIZE-1) {
+            distanceMap[v_idx][h_idx] = distance;
         }
 
         // Szukanie celu
@@ -181,24 +213,33 @@ int main() {
         int target_v = -1;
         int target_h = -1;
 
-        for (int i = 0; i <= 180; i++) {
-            for (int j = 0; j <= 180; j++) {
-                float d = distanceMap[i][j];
+        for (int v = 0; v <= VER_SIZE-1; v++) {
+            for (int h = 0; h <= HOR_SIZE-1; h++) {
+                float d = distanceMap[v][h];
                 if (d > minimumRange && d < maximumRange) {
                     if (d < min_dist) {
                         min_dist = d;
-                        target_v = i;
-                        target_h = j;
+                        target_v = v;
+                        target_h = h;
                     }
                 }
             }
         }
 
-        // Strzał
+
         if (target_v != -1 && target_h != -1) {
-             fire_at_target(target_v, target_h);
-             printf("Strzał w cel na odległości: %.2f cm (ver: %d, hor: %d)\n", min_dist, target_v, target_h);
-        }else {   
+            // Wycelowanie
+            servo_gun_ver.write(target_v + MIN_VER_ANGLE);
+            servo_gun_hor.write(target_h + MIN_HOR_ANGLE);
+            
+            // Wciśnięcie przycisku do strzału
+            if (!gpio_get(BUTTON_PIN)) {
+                // Strzał
+                fire_at_target(target_v + MIN_VER_ANGLE, target_h + MIN_HOR_ANGLE);
+                printf("Strzał w cel na odległości: %.2f cm (ver: %d, hor: %d)\n", min_dist, target_v + MIN_VER_ANGLE, target_h + MIN_HOR_ANGLE);
+            }
+            sleep_ms(10);   // Ochrona przed debouncingiem
+        }else {
             servo_gun_ver.write(pos_gun_ver);
             servo_gun_hor.write(pos_gun_hor);
             printf("Brak celu w zasięgu.\n");
@@ -207,40 +248,43 @@ int main() {
         // Delay 500ms
         //sleep_ms(500);
 
+        // Logika poruszania sensorem (losowe)
+        random_deg_pos(pos_sensor_ver, pos_sensor_hor);
+
         // Logika poruszania sensorem (skanowanie 2D)
-        bool move_vertical = false;
+        // bool move_vertical = false;
 
-        if (horizontalDirection) {
-            pos_sensor_hor += 10;
-            if (pos_sensor_hor > 150) {
-                pos_sensor_hor = 150;
-                horizontalDirection = false;
-                move_vertical = true;
-            }
-        } else {
-            pos_sensor_hor -= 10;
-            if (pos_sensor_hor < 30) {
-                pos_sensor_hor = 30;
-                horizontalDirection = true;
-                move_vertical = true;
-            }
-        }
+        // if (horizontalDirection) {
+        //     pos_sensor_hor += 10;
+        //     if (pos_sensor_hor > 150) {
+        //         pos_sensor_hor = 150;
+        //         horizontalDirection = false;
+        //         move_vertical = true;
+        //     }
+        // } else {
+        //     pos_sensor_hor -= 10;
+        //     if (pos_sensor_hor < 30) {
+        //         pos_sensor_hor = 30;
+        //         horizontalDirection = true;
+        //         move_vertical = true;
+        //     }
+        // }
 
-        if (move_vertical) {
-            if (verticalDirection) {
-                pos_sensor_ver += 10;
-                if (pos_sensor_ver > 120) {
-                    pos_sensor_ver = 120;
-                    verticalDirection = false;
-                }
-            } else {
-                pos_sensor_ver -= 10;
-                if (pos_sensor_ver < 80) {
-                    pos_sensor_ver = 80;
-                    verticalDirection = true;
-                }
-            }
-        }
+        // if (move_vertical) {
+        //     if (verticalDirection) {
+        //         pos_sensor_ver += 10;
+        //         if (pos_sensor_ver > 120) {
+        //             pos_sensor_ver = 120;
+        //             verticalDirection = false;
+        //         }
+        //     } else {
+        //         pos_sensor_ver -= 10;
+        //         if (pos_sensor_ver < 80) {
+        //             pos_sensor_ver = 80;
+        //             verticalDirection = true;
+        //         }
+        //     }
+        // }
 
         servo_sensor_hor.write(pos_sensor_hor);
         servo_sensor_ver.write(pos_sensor_ver);
