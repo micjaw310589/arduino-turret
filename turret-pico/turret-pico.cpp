@@ -161,8 +161,6 @@ int main() {
         }
 
         random_scan_next_step(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos.VER, scanner_servo_pos.HOR);
-
-        sleep_ms(15); // waits for the servo to reach the position
     }
     
     return 0;
@@ -315,6 +313,7 @@ void random_scan_next_step(Servo &ver_servo, Servo &hor_servo, int &ver_pos_deg,
     random_deg_pos(ver_pos_deg, hor_pos_deg);
     ver_servo.write(ver_pos_deg);
     hor_servo.write(hor_pos_deg);
+    sleep_ms(15);
 }
 
 void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, int &ver_pos_deg, int &hor_pos_deg, 
@@ -354,5 +353,7 @@ void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, int &ver_pos_deg,
     }
 
     ver_servo.write(ver_pos_deg);
+    sleep_ms(15);
     hor_servo.write(hor_pos_deg);
+    sleep_ms(15);
 }
