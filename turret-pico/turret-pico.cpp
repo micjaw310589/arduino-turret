@@ -44,7 +44,15 @@ constexpr int COL_NUM = SCANNER_MAX_HOR_ANGLE - SCANNER_MIN_HOR_ANGLE + 1;  // 1
 float distanceMap[ROW_NUM][COL_NUM] = {999999.0f};
 
 // Deklaracje funkcji i klas
-class Servo;
+class Servo {
+    uint pin;
+    uint slice_num;
+    uint channel;
+
+public:
+    void attach(uint gpio_pin);
+    void write(int angle);
+};
 
 struct ServoPosition {
     int VER;
@@ -169,39 +177,32 @@ int main() {
 
 
 
-// --- Klasa pomocnicza dla Serwomechanizmów (zamiast Servo.h) ---
-class Servo {
-    uint pin;
-    uint slice_num;
-    uint channel;
+void Servo::attach(uint gpio_pin) {
+    pin = gpio_pin;
+    gpio_set_function(pin, GPIO_FUNC_PWM);
+    slice_num = pwm_gpio_to_slice_num(pin);
+    channel = pwm_gpio_to_channel(pin);
 
-public:
-    void attach(uint gpio_pin) {
-        pin = gpio_pin;
-        gpio_set_function(pin, GPIO_FUNC_PWM);
-        slice_num = pwm_gpio_to_slice_num(pin);
-        channel = pwm_gpio_to_channel(pin);
+    // Konfiguracja PWM dla 50Hz (standard dla serw)
+    pwm_config config = pwm_get_default_config();
+    pwm_config_set_clkdiv(&config, 64.0f); // Zegar systemowy dzielony przez 64
+    pwm_config_set_wrap(&config, 39063);   // Ustawienie okresu na 20ms (50Hz)
+    pwm_init(slice_num, &config, true);
+}
 
-        // Konfiguracja PWM dla 50Hz (standard dla serw)
-        pwm_config config = pwm_get_default_config();
-        pwm_config_set_clkdiv(&config, 64.0f); // Zegar systemowy dzielony przez 64
-        pwm_config_set_wrap(&config, 39063);   // Ustawienie okresu na 20ms (50Hz)
-        pwm_init(slice_num, &config, true);
-    }
+void Servo::write(int angle) {
+    if (angle < 0) angle = 0;
+    if (angle > 180) angle = 180;
 
-    void write(int angle) {
-        if (angle < 0) angle = 0;
-        if (angle > 180) angle = 180;
+    // Mapowanie kąta (0-180) na szerokość impulsu (500us - 2500us)
+    // 500us to 0 stopni, 2500us to 180 stopni
+    float pulse_width_us = 500.0f + (angle / 180.0f) * 2000.0f;
+    
+    // Konwersja czasu na poziom PWM (zegar po podziale to ~1.95MHz)
+    uint16_t level = (uint16_t)(pulse_width_us * 1.953125f);
+    pwm_set_chan_level(slice_num, channel, level);
+}
 
-        // Mapowanie kąta (0-180) na szerokość impulsu (500us - 2500us)
-        // 500us to 0 stopni, 2500us to 180 stopni
-        float pulse_width_us = 500.0f + (angle / 180.0f) * 2000.0f;
-        
-        // Konwersja czasu na poziom PWM (zegar po podziale to ~1.95MHz)
-        uint16_t level = (uint16_t)(pulse_width_us * 1.953125f);
-        pwm_set_chan_level(slice_num, channel, level);
-    }
-};
 
 // This function uses the hardware to create a unique seed
 void seed_random_from_rosc() {
