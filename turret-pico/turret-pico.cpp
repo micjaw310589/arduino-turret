@@ -145,13 +145,14 @@ int main() {
         if (target_pos.isWithinAngleRange()) {
             // Wycelowanie
             servo_gun_ver.write(target_pos.VER);
+            sleep_ms(15);
             servo_gun_hor.write(target_pos.HOR);
+            sleep_ms(15);
 
             // Wciśnięcie przycisku do strzału
             if (!gpio_get(BUTTON_PIN)) {
-                // Strzał
-                shoot();
                 printf("Strzał w cel na odległości: %.2f cm (ver: %d, hor: %d)\n", target_pos.DIST_CM, target_pos.VER, target_pos.HOR);
+                shoot();
             }
             sleep_ms(10);   // Ochrona przed debouncingiem
         }else {
@@ -294,12 +295,10 @@ AimPosition get_position_to_target() {
 }
 
 void shoot() {
-    sleep_ms(15);
-    
     // Symulacja strzału
     gpio_put(LASER_PIN, 1);
     gpio_put(BUZZER_PIN, 1);
-    sleep_ms(100); // Czas trwania strzału
+    sleep_ms(1000); // Czas trwania strzału
     gpio_put(LASER_PIN, 0);
     gpio_put(BUZZER_PIN, 0);
 }
