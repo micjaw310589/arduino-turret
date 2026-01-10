@@ -39,9 +39,10 @@ constexpr int DEFAULT_GUN_HOR_ANGLE = 90;
 constexpr int DEFAULT_GUN_VER_ANGLE = 90;
 
 // Mapa odległości [ver][hor] dla kątów nastawu serw skanera
-constexpr int ROW_NUM = SCANNER_MAX_VER_ANGLE - SCANNER_MIN_VER_ANGLE + 1;  // 41
-constexpr int COL_NUM = SCANNER_MAX_HOR_ANGLE - SCANNER_MIN_HOR_ANGLE + 1;  // 121
+constexpr int ROW_NUM = 181;
+constexpr int COL_NUM = 181;
 float distanceMap[ROW_NUM][COL_NUM] = {999999.0f};
+
 
 // Deklaracje funkcji i klas
 class Servo {
@@ -68,17 +69,23 @@ struct AimPosition : ServoPosition {
     float DIST_CM;
 };
 
+// Pamięć odczytów -- bufor cykliczny
+constexpr int SCAN_BUFFER_SIZE = 10;
+AimPosition scanBuffer[SCAN_BUFFER_SIZE] = {-1, -1, 999999.0f};
+
 void seed_random_from_rosc();
 uint64_t get_pulse_width(uint pin);
+
+void set_position(Servo &servo_ver, Servo &servo_hor, const ServoPosition &position);
 float read_distance_cm();
 void led_on_if_in_range(float distance_cm);
-void write_distance_to_map(int curr_ver_scanner_pos, int curr_hor_scanner_pos, float distance_cm);
+void write_distance_to_buffer(const ServoPosition &scanner_servo, float distance_cm);
+void write_distance_to_map(const ServoPosition &scanner_servo, float distance_cm);
 AimPosition get_position_to_target();
 void shoot();
-void random_deg_pos(int &ver_pos_deg, int &hor_pos_deg);
-void random_scan_next_step(Servo &ver_servo, Servo &hor_servo, int &ver_pos_deg, int &hor_pos_deg);
-void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, int &ver_pos_deg, int &hor_pos_deg, 
-                      bool &horizontalDirection, bool &verticalDirection);
+void random_deg_pos(ServoPosition &scanner_servo);
+void random_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo);
+void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo);
 
 // Globalne obiekty serw
 Servo servo_scanner_hor;
@@ -87,11 +94,9 @@ Servo servo_gun_hor;
 Servo servo_gun_ver;
 
 // Pozycje serw
-ServoPosition scanner_servo_pos = {DEFAULT_SCANNER_VER_ANGLE, DEFAULT_SCANNER_HOR_ANGLE};
+// constexpr ServoPosition scanner_start_pos = {SCANNER_MIN_VER_ANGLE, SCANNER_MAX_HOR_ANGLE};
+ServoPosition scanner_servo_pos = {SCANNER_MIN_VER_ANGLE, SCANNER_MAX_HOR_ANGLE};
 ServoPosition gun_servo_pos = {DEFAULT_GUN_VER_ANGLE, DEFAULT_GUN_HOR_ANGLE};
-
-// bool horizontalDirection = true; // true - prawo, false - lewo
-// bool verticalDirection = true;   // true - góra, false - dół
 
 
 void setup() {
@@ -135,6 +140,8 @@ void setup() {
     sleep_ms(300);
     servo_gun_ver.write(DEFAULT_GUN_VER_ANGLE);
     sleep_ms(300);
+
+    set_position(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
 }
 
 
@@ -146,16 +153,14 @@ int main() {
         float distance_cm = read_distance_cm();
         printf("Zmierzona odległość: %.2f cm\n", distance_cm);
 
-        write_distance_to_map(scanner_servo_pos.VER, scanner_servo_pos.HOR, distance_cm);
+        write_distance_to_buffer(scanner_servo_pos, distance_cm);
+        // write_distance_to_map(scanner_servo_pos, distance_cm);
 
         AimPosition target_pos = get_position_to_target();
 
-        if (target_pos.isWithinAngleRange()) {
+        if (target_pos.HOR != -1 && target_pos.VER != -1) {
             // Wycelowanie
-            servo_gun_ver.write(target_pos.VER);
-            sleep_ms(15);
-            servo_gun_hor.write(target_pos.HOR);
-            sleep_ms(15);
+            set_position(servo_gun_ver, servo_gun_hor, target_pos);
 
             // Wciśnięcie przycisku do strzału
             if (!gpio_get(BUTTON_PIN)) {
@@ -164,12 +169,12 @@ int main() {
             }
             sleep_ms(10);   // Ochrona przed debouncingiem
         }else {
-            servo_gun_ver.write(gun_servo_pos.VER);
-            servo_gun_hor.write(gun_servo_pos.HOR);
+            set_position(servo_gun_ver, servo_gun_hor, gun_servo_pos);
             printf("Brak celu w zasięgu.\n");
         }
 
-        random_scan_next_step(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos.VER, scanner_servo_pos.HOR);
+        // random_scan_next_step(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
+        linear_scan_next_step(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
     }
     
     return 0;
@@ -234,6 +239,14 @@ uint64_t get_pulse_width(uint pin) {
     return absolute_time_diff_us(start_time, end_time);
 }
 
+
+void set_position(Servo &servo_ver, Servo &servo_hor, const ServoPosition &position) {
+    servo_hor.write(position.HOR);
+    sleep_ms(50);
+    servo_ver.write(position.VER);
+    sleep_ms(50);
+}
+
 float read_distance_cm() {
     // 1. Wyczyszczenie pinu TRIG
     gpio_put(TRIG_PIN, 0);
@@ -264,35 +277,69 @@ void led_on_if_in_range(float distance_cm){
     }
 }
 
-void write_distance_to_map(int curr_ver_scanner_pos, int curr_hor_scanner_pos, float distance_cm) {
-    int v_idx = curr_ver_scanner_pos - SCANNER_MIN_VER_ANGLE;
-    int h_idx = curr_hor_scanner_pos - SCANNER_MIN_HOR_ANGLE;
-    if (v_idx >= 0 && v_idx <= ROW_NUM-1 && h_idx >= 0 && h_idx <= COL_NUM-1) {
-        distanceMap[v_idx][h_idx] = distance_cm;
-    }
+void write_distance_to_buffer(const ServoPosition &scanner_servo, float distance_cm)
+{
+    static int buffer_index = 0;
 
+    if (MIN_SCANNER_DIST_CM <= distance_cm && distance_cm <= MAX_SCANNER_DIST_CM) {
+        scanBuffer[buffer_index].VER = scanner_servo.VER;
+        scanBuffer[buffer_index].HOR = scanner_servo.HOR;
+        scanBuffer[buffer_index].DIST_CM = distance_cm;
+        
+        buffer_index = (buffer_index + 1) % SCAN_BUFFER_SIZE;
+    }
 }
 
-AimPosition get_position_to_target() {
-        // Szukanie celu (najblizszy odczyt w tablicy)
-        float min_dist = 10000.0f;
-        int target_v = -1;
-        int target_h = -1;
+void write_distance_to_map(const ServoPosition &scanner_servo, float distance_cm) {
 
-        for (int v = 0; v <= ROW_NUM-1; v++) {
-            for (int h = 0; h <= COL_NUM-1; h++) {
-                float d = distanceMap[v][h];
-                if (d > MIN_SCANNER_DIST_CM && d < MAX_SCANNER_DIST_CM) {
-                    if (d < min_dist) {
-                        min_dist = d;
-                        target_v = v;
-                        target_h = h;
-                    }
-                }
-            }
+    if (MIN_SCANNER_DIST_CM <= distance_cm && distance_cm <= MAX_SCANNER_DIST_CM) {
+        int v_idx = scanner_servo.VER;
+        int h_idx = scanner_servo.HOR;
+        if (v_idx >= 0 && v_idx <= ROW_NUM-1 && h_idx >= 0 && h_idx <= COL_NUM-1) {
+            distanceMap[v_idx][h_idx] = distance_cm;
         }
+    }
+}
 
-        return {target_v + SCANNER_MIN_VER_ANGLE, target_h + SCANNER_MIN_HOR_ANGLE, min_dist};
+// ======== Ta wersja szuka celu w CAŁEJ mapie odległości ========
+// AimPosition get_position_to_target() {
+//         // Szukanie celu (najblizszy odczyt w tablicy)
+//         float min_dist = 10000.0f;
+//         int target_v = -1;
+//         int target_h = -1;
+
+//         for (int v = 0; v <= ROW_NUM-1; v++) {
+//             for (int h = 0; h <= COL_NUM-1; h++) {
+//                 float d = distanceMap[v][h];
+//                 if (d > MIN_SCANNER_DIST_CM && d < MAX_SCANNER_DIST_CM) {
+//                     if (d < min_dist) {
+//                         min_dist = d;
+//                         target_v = v;
+//                         target_h = h;
+//                     }
+//                 }
+//             }
+//         }
+
+//         return {target_v, target_h, min_dist};
+// }
+
+AimPosition get_position_to_target() {
+    // Szukanie celu (najblizszy odczyt w buforze)
+    float min_dist = 10000.0f;
+    int target_v = -1;
+    int target_h = -1;
+
+    for (int i = 0; i < SCAN_BUFFER_SIZE; i++) {
+        float d = scanBuffer[i].DIST_CM;
+        if (d < min_dist) {
+            min_dist = d;
+            target_v = scanBuffer[i].VER;
+            target_h = scanBuffer[i].HOR;
+        }
+    }
+
+    return {target_v, target_h, min_dist};
 }
 
 void shoot() {
@@ -304,33 +351,32 @@ void shoot() {
     gpio_put(BUZZER_PIN, 0);
 }
 
-void random_deg_pos(int &ver_pos_deg, int &hor_pos_deg) {
-    ver_pos_deg = rand() % (SCANNER_MAX_VER_ANGLE - SCANNER_MIN_VER_ANGLE + 1) + SCANNER_MIN_VER_ANGLE;
-    hor_pos_deg = rand() % (SCANNER_MAX_HOR_ANGLE - SCANNER_MIN_HOR_ANGLE + 1) + SCANNER_MIN_HOR_ANGLE;
+void random_deg_pos(ServoPosition &scanner_servo) {
+    scanner_servo.VER = rand() % (SCANNER_MAX_VER_ANGLE - SCANNER_MIN_VER_ANGLE + 1) + SCANNER_MIN_VER_ANGLE;
+    scanner_servo.HOR = rand() % (SCANNER_MAX_HOR_ANGLE - SCANNER_MIN_HOR_ANGLE + 1) + SCANNER_MIN_HOR_ANGLE;
 }
 
-void random_scan_next_step(Servo &ver_servo, Servo &hor_servo, int &ver_pos_deg, int &hor_pos_deg){
-    random_deg_pos(ver_pos_deg, hor_pos_deg);
-    ver_servo.write(ver_pos_deg);
-    hor_servo.write(hor_pos_deg);
-    sleep_ms(15);
+void random_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo){
+    random_deg_pos(scanner_servo);
+    set_position(ver_servo, hor_servo, scanner_servo);
 }
 
-void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, int &ver_pos_deg, int &hor_pos_deg, 
-                      bool &horizontalDirection, bool &verticalDirection){
+void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo) {
+    static bool horizontalDirection = false; // true - prawo, false - lewo
+    static bool verticalDirection = true;   // true - góra, false - dół
     bool move_vertical = false;
 
     if (horizontalDirection) {
-        hor_pos_deg += 10;
-        if (hor_pos_deg > SCANNER_MAX_HOR_ANGLE) {
-            hor_pos_deg = SCANNER_MAX_HOR_ANGLE;
+        scanner_servo.HOR += 10;
+        if (scanner_servo.HOR > SCANNER_MAX_HOR_ANGLE) {
+            scanner_servo.HOR = SCANNER_MAX_HOR_ANGLE;
             horizontalDirection = false;
             move_vertical = true;
         }
     } else {
-        hor_pos_deg -= 10;
-        if (hor_pos_deg < SCANNER_MIN_HOR_ANGLE) {
-            hor_pos_deg = SCANNER_MIN_HOR_ANGLE;
+        scanner_servo.HOR -= 10;
+        if (scanner_servo.HOR < SCANNER_MIN_HOR_ANGLE) {
+            scanner_servo.HOR = SCANNER_MIN_HOR_ANGLE;
             horizontalDirection = true;
             move_vertical = true;
         }
@@ -338,22 +384,19 @@ void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, int &ver_pos_deg,
 
     if (move_vertical) {
         if (verticalDirection) {
-            ver_pos_deg += 10;
-            if (ver_pos_deg > SCANNER_MAX_VER_ANGLE) {
-                ver_pos_deg = SCANNER_MAX_VER_ANGLE;
+            scanner_servo.VER += 10;
+            if (scanner_servo.VER > SCANNER_MAX_VER_ANGLE) {
+                scanner_servo.VER = SCANNER_MAX_VER_ANGLE;
                 verticalDirection = false;
             }
         } else {
-            ver_pos_deg -= 10;
-            if (ver_pos_deg < SCANNER_MIN_VER_ANGLE) {
-                ver_pos_deg = SCANNER_MIN_VER_ANGLE;
+            scanner_servo.VER -= 10;
+            if (scanner_servo.VER < SCANNER_MIN_VER_ANGLE) {
+                scanner_servo.VER = SCANNER_MIN_VER_ANGLE;
                 verticalDirection = true;
             }
         }
     }
 
-    ver_servo.write(ver_pos_deg);
-    sleep_ms(15);
-    hor_servo.write(hor_pos_deg);
-    sleep_ms(15);
+    set_position(ver_servo, hor_servo, scanner_servo);
 }
