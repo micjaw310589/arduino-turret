@@ -27,10 +27,10 @@ constexpr int SCANNER_MIN_HOR_ANGLE = 30;
 constexpr int SCANNER_MAX_HOR_ANGLE = 150;
 constexpr int SCANNER_MIN_VER_ANGLE = 80;
 constexpr int SCANNER_MAX_VER_ANGLE = 120;
-constexpr int GUN_MIN_HOR_ANGLE = 0;
-constexpr int GUN_MAX_HOR_ANGLE = 180;
-constexpr int GUN_MIN_VER_ANGLE = 0;
-constexpr int GUN_MAX_VER_ANGLE = 180;
+constexpr int GUN_MIN_HOR_ANGLE = 30;
+constexpr int GUN_MAX_HOR_ANGLE = 150;
+constexpr int GUN_MIN_VER_ANGLE = 80;
+constexpr int GUN_MAX_VER_ANGLE = 120;
 
 // Domyślne nastawy serw
 constexpr int DEFAULT_SCANNER_HOR_ANGLE = 90;
