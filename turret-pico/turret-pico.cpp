@@ -27,10 +27,10 @@ constexpr int SCANNER_MIN_HOR_ANGLE = 30;
 constexpr int SCANNER_MAX_HOR_ANGLE = 150;
 constexpr int SCANNER_MIN_VER_ANGLE = 80;
 constexpr int SCANNER_MAX_VER_ANGLE = 120;
-constexpr int GUN_MIN_HOR_ANGLE = 0;
-constexpr int GUN_MAX_HOR_ANGLE = 180;
-constexpr int GUN_MIN_VER_ANGLE = 0;
-constexpr int GUN_MAX_VER_ANGLE = 180;
+constexpr int GUN_MIN_HOR_ANGLE = 30;
+constexpr int GUN_MAX_HOR_ANGLE = 150;
+constexpr int GUN_MIN_VER_ANGLE = 80;
+constexpr int GUN_MAX_VER_ANGLE = 120;
 
 // Domyślne nastawy serw
 constexpr int DEFAULT_SCANNER_HOR_ANGLE = 90;
@@ -75,6 +75,8 @@ AimPosition scanBuffer[SCAN_BUFFER_SIZE] = {-1, -1, 999999.0f};
 
 void seed_random_from_rosc();
 uint64_t get_pulse_width(uint pin);
+
+ServoPosition parallax_correction(const AimPosition &target_pos);
 
 void set_position(Servo &servo_ver, Servo &servo_hor, const ServoPosition &position);
 float read_distance_cm();
@@ -160,7 +162,8 @@ int main() {
 
         if (target_pos.HOR != -1 && target_pos.VER != -1) {
             // Wycelowanie
-            set_position(servo_gun_ver, servo_gun_hor, target_pos);
+            ServoPosition target_for_gun = parallax_correction(target_pos);
+            set_position(servo_gun_ver, servo_gun_hor, target_for_gun);
 
             // Wciśnięcie przycisku do strzału
             if (!gpio_get(BUTTON_PIN)) {
@@ -237,6 +240,41 @@ uint64_t get_pulse_width(uint pin) {
     absolute_time_t end_time = get_absolute_time();
 
     return absolute_time_diff_us(start_time, end_time);
+}
+
+
+ServoPosition parallax_correction(const AimPosition &target_scanner) {
+    constexpr float X_OFFSET_MM = 0.0f; 
+    constexpr float Y_OFFSET_MM = 119.5f;
+    constexpr float Z_OFFSET_MM = -18.75f;
+
+    float dist_mm = target_scanner.DIST_CM * 10.0f;
+    float alpha_rad = (target_scanner.HOR - DEFAULT_SCANNER_HOR_ANGLE) * 3.14159265f / 180.0f;    // pan (left/right)
+    float beta_rad = (target_scanner.VER - DEFAULT_SCANNER_VER_ANGLE) * 3.14159265f / 180.0f;     // tilt (up/down)
+
+    // XYZ position from scanner origin
+    float x_s = dist_mm * cosf(beta_rad) * cosf(alpha_rad);
+    float y_s = dist_mm * cosf(beta_rad) * sinf(alpha_rad);
+    float z_s = dist_mm * sinf(beta_rad);
+
+    // XYZ position from gun origin
+    float x_g = x_s + X_OFFSET_MM;
+    float y_g = y_s + Y_OFFSET_MM;
+    float z_g = z_s + Z_OFFSET_MM;
+
+    // Recalculate angles for gun
+    float dist_g = sqrtf(x_g * x_g + y_g * y_g + z_g * z_g);
+    float alpha_g_rad = atan2f(y_g, x_g);
+    float beta_g_rad = acosf(z_g / dist_g);
+
+    // Convert back to degrees
+    float alpha_g_deg = alpha_g_rad * 180.0f / 3.14159265f;
+    float beta_g_deg = beta_g_rad * 180.0f / 3.14159265f;
+
+    int gun_hor_angle = static_cast<int>(alpha_g_deg + DEFAULT_GUN_HOR_ANGLE);
+    int gun_ver_angle = static_cast<int>(beta_g_deg + DEFAULT_GUN_VER_ANGLE);
+
+    return {gun_ver_angle, gun_hor_angle};
 }
 
 
