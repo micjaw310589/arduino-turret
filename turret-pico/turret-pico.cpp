@@ -271,7 +271,10 @@ ServoPosition parallax_correction(const AimPosition &target_scanner) {
     float alpha_g_deg = alpha_g_rad * 180.0f / 3.14159265f;
     float beta_g_deg = beta_g_rad * 180.0f / 3.14159265f;
 
-    return {beta_g_deg + DEFAULT_GUN_VER_ANGLE, alpha_g_deg + DEFAULT_GUN_HOR_ANGLE};
+    int gun_hor_angle = static_cast<int>(alpha_g_deg + DEFAULT_GUN_HOR_ANGLE);
+    int gun_ver_angle = static_cast<int>(beta_g_deg + DEFAULT_GUN_VER_ANGLE);
+
+    return {gun_ver_angle, gun_hor_angle};
 }
 
 
