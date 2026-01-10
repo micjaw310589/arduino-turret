@@ -7,130 +7,99 @@
 #include "hardware/structs/rosc.h"
 
 // Definicje Pinów
-#define ECHO_PIN 6
-#define TRIG_PIN 7
-#define LED_PIN 25         // Uwaga: Dioda na płytce Pico to zazwyczaj pin 25. Tu zostawiam 13 wg Twojego kodu.
-#define LASER_PIN 8
-#define SERVO_SENSOR_HOR_PIN 2
-#define SERVO_SENSOR_VER_PIN 3
-#define SERVO_GUN_HOR_PIN 4
-#define SERVO_GUN_VER_PIN 5
-#define BUZZER_PIN 9
-#define BUTTON_PIN 10
+constexpr int ECHO_PIN = 6;
+constexpr int TRIG_PIN = 7;
+constexpr int LED_PIN = 25;
+constexpr int LASER_PIN = 8;
+constexpr int SERVO_SCANNER_HOR_PIN = 2;
+constexpr int SERVO_SCANNER_VER_PIN = 3;
+constexpr int SERVO_GUN_HOR_PIN = 4;
+constexpr int SERVO_GUN_VER_PIN = 5;
+constexpr int BUZZER_PIN = 9;
+constexpr int BUTTON_PIN = 10;
 
-// --- Klasa pomocnicza dla Serwomechanizmów (zamiast Servo.h) ---
-class PicoServo {
+// Zakres odległości do wykrywania celu (cm)
+constexpr float MAX_SCANNER_DIST_CM = 200.0f;
+constexpr float MIN_SCANNER_DIST_CM = 20.0f;
+
+// Zakresy ruchu serw
+constexpr int SCANNER_MIN_HOR_ANGLE = 30;
+constexpr int SCANNER_MAX_HOR_ANGLE = 150;
+constexpr int SCANNER_MIN_VER_ANGLE = 80;
+constexpr int SCANNER_MAX_VER_ANGLE = 120;
+constexpr int GUN_MIN_HOR_ANGLE = 0;
+constexpr int GUN_MAX_HOR_ANGLE = 180;
+constexpr int GUN_MIN_VER_ANGLE = 0;
+constexpr int GUN_MAX_VER_ANGLE = 180;
+
+// Domyślne nastawy serw
+constexpr int DEFAULT_SCANNER_HOR_ANGLE = 90;
+constexpr int DEFAULT_SCANNER_VER_ANGLE = 90;
+constexpr int DEFAULT_GUN_HOR_ANGLE = 90;
+constexpr int DEFAULT_GUN_VER_ANGLE = 90;
+
+// Mapa odległości [ver][hor] dla kątów nastawu serw skanera
+constexpr int ROW_NUM = 181;
+constexpr int COL_NUM = 181;
+float distanceMap[ROW_NUM][COL_NUM] = {999999.0f};
+
+
+// Deklaracje funkcji i klas
+class Servo {
     uint pin;
     uint slice_num;
     uint channel;
 
 public:
-    void attach(uint gpio_pin) {
-        pin = gpio_pin;
-        gpio_set_function(pin, GPIO_FUNC_PWM);
-        slice_num = pwm_gpio_to_slice_num(pin);
-        channel = pwm_gpio_to_channel(pin);
+    void attach(uint gpio_pin);
+    void write(int angle);
+};
 
-        // Konfiguracja PWM dla 50Hz (standard dla serw)
-        pwm_config config = pwm_get_default_config();
-        pwm_config_set_clkdiv(&config, 64.0f); // Zegar systemowy dzielony przez 64
-        pwm_config_set_wrap(&config, 39063);   // Ustawienie okresu na 20ms (50Hz)
-        pwm_init(slice_num, &config, true);
-    }
+struct ServoPosition {
+    int VER;
+    int HOR;
 
-    void write(int angle) {
-        if (angle < 0) angle = 0;
-        if (angle > 180) angle = 180;
-
-        // Mapowanie kąta (0-180) na szerokość impulsu (500us - 2500us)
-        // 500us to 0 stopni, 2500us to 180 stopni
-        float pulse_width_us = 500.0f + (angle / 180.0f) * 2000.0f;
-        
-        // Konwersja czasu na poziom PWM (zegar po podziale to ~1.95MHz)
-        uint16_t level = (uint16_t)(pulse_width_us * 1.953125f);
-        pwm_set_chan_level(slice_num, channel, level);
+    bool isWithinAngleRange() {
+        return (VER >= GUN_MIN_VER_ANGLE && VER <= GUN_MAX_VER_ANGLE &&
+                HOR >= GUN_MIN_HOR_ANGLE && HOR <= GUN_MAX_HOR_ANGLE);
     }
 };
 
-// --- Globalne obiekty serw ---
-PicoServo servo_sensor_hor;
-PicoServo servo_sensor_ver;
-PicoServo servo_gun_hor;
-PicoServo servo_gun_ver;
+struct AimPosition : ServoPosition {
+    float DIST_CM;
+};
 
-// Zmienne pozycji
-const int MIN_HOR_ANGLE = 30;
-const int MAX_HOR_ANGLE = 150;
-const int MIN_VER_ANGLE = 80;
-const int MAX_VER_ANGLE = 120;
+// Pamięć odczytów -- bufor cykliczny
+constexpr int SCAN_BUFFER_SIZE = 10;
+AimPosition scanBuffer[SCAN_BUFFER_SIZE] = {-1, -1, 999999.0f};
 
-int pos_sensor_hor = 90;
-int pos_sensor_ver = 90;
-int pos_gun_hor = 90;
-int pos_gun_ver = 90;
+void seed_random_from_rosc();
+uint64_t get_pulse_width(uint pin);
 
-bool horizontalDirection = true; // true - prawo, false - lewo
-bool verticalDirection = true;   // true - góra, false - dół
+void set_position(Servo &servo_ver, Servo &servo_hor, const ServoPosition &position);
+float read_distance_cm();
+void led_on_if_in_range(float distance_cm);
+void write_distance_to_buffer(const ServoPosition &scanner_servo, float distance_cm);
+void write_distance_to_map(const ServoPosition &scanner_servo, float distance_cm);
+AimPosition get_position_to_target();
+void shoot();
+void random_deg_pos(ServoPosition &scanner_servo);
+void random_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo);
+void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo);
 
-int maximumRange = 200;
-int minimumRange = 20;
-float distance;
+// Globalne obiekty serw
+Servo servo_scanner_hor;
+Servo servo_scanner_ver;
+Servo servo_gun_hor;
+Servo servo_gun_ver;
 
-// Mapa odległości [ver][hor] dla kątów 0-180 (indeks = kąt/10)
-const int VER_SIZE = 41;
-const int HOR_SIZE = 121;
-float distanceMap[VER_SIZE][HOR_SIZE] = {999999.0f};
+// Pozycje serw
+// constexpr ServoPosition scanner_start_pos = {SCANNER_MIN_VER_ANGLE, SCANNER_MAX_HOR_ANGLE};
+ServoPosition scanner_servo_pos = {SCANNER_MIN_VER_ANGLE, SCANNER_MAX_HOR_ANGLE};
+ServoPosition gun_servo_pos = {DEFAULT_GUN_VER_ANGLE, DEFAULT_GUN_HOR_ANGLE};
 
-void fire_at_target(const int ver_idx, const int hor_idx) {
-    // int angle_ver = ver_idx;
-    // int angle_hor = hor_idx;
 
-    sleep_ms(15);
-    
-    // Symulacja strzału
-    gpio_put(LASER_PIN, 1);
-    gpio_put(BUZZER_PIN, 1);
-    sleep_ms(100); // Czas trwania strzału
-    gpio_put(LASER_PIN, 0);
-    gpio_put(BUZZER_PIN, 0);
-}
-
-// Funkcja pomocnicza do odczytu czasu impulsu (zamiennik pulseIn)
-uint64_t get_pulse_width(uint pin) {
-    // Czekaj na stan wysoki (z timeoutem 100ms)
-    absolute_time_t timeout = make_timeout_time_ms(30);
-    while (gpio_get(pin) == 0) {
-        if (absolute_time_diff_us(get_absolute_time(), timeout) < 0) return 0;
-    }
-    absolute_time_t start_time = get_absolute_time();
-
-    // Czekaj na stan niski
-    while (gpio_get(pin) == 1) {
-        if (absolute_time_diff_us(get_absolute_time(), timeout) < 0) return 0;
-    }
-    absolute_time_t end_time = get_absolute_time();
-
-    return absolute_time_diff_us(start_time, end_time);
-}
-
-// This function uses the hardware to create a unique seed
-void seed_random_from_rosc() {
-    uint32_t random = 0;
-    volatile uint32_t *rnd_reg = (uint32_t *)(ROSC_BASE + ROSC_RANDOMBIT_OFFSET);
-    
-    // Mix bits from the hardware random generator
-    for (int i = 0; i < 32; i++) {
-        random = (random << 1) | (*rnd_reg & 1);
-    }
-    srand(random); // Initialize the standard random number generator
-}
-
-void random_deg_pos(int &ver_pos_deg, int &hor_pos_deg) {
-    ver_pos_deg = rand() % (MAX_VER_ANGLE - MIN_VER_ANGLE + 1) + MIN_VER_ANGLE;
-    hor_pos_deg = rand() % (MAX_HOR_ANGLE - MIN_HOR_ANGLE + 1) + MIN_HOR_ANGLE;
-}
-
-int main() {
+void setup() {
     // Inicjalizacja Serial (USB)
     stdio_init_all();
 
@@ -157,140 +126,277 @@ int main() {
     gpio_pull_up(BUTTON_PIN);
 
     // Podłączenie serw
-    servo_sensor_hor.attach(SERVO_SENSOR_HOR_PIN);
-    servo_sensor_ver.attach(SERVO_SENSOR_VER_PIN);
+    servo_scanner_hor.attach(SERVO_SCANNER_HOR_PIN);
+    servo_scanner_ver.attach(SERVO_SCANNER_VER_PIN);
     servo_gun_hor.attach(SERVO_GUN_HOR_PIN);
     servo_gun_ver.attach(SERVO_GUN_VER_PIN);
 
     // Ustawienie pozycji początkowych
-    servo_sensor_hor.write(pos_sensor_hor);
+    servo_scanner_hor.write(DEFAULT_SCANNER_HOR_ANGLE);
     sleep_ms(300);
-    servo_sensor_ver.write(pos_sensor_ver);
+    servo_scanner_ver.write(DEFAULT_SCANNER_VER_ANGLE);
     sleep_ms(300);
-    servo_gun_hor.write(pos_gun_hor);
+    servo_gun_hor.write(DEFAULT_GUN_HOR_ANGLE);
     sleep_ms(300);
-    servo_gun_ver.write(pos_gun_ver);
+    servo_gun_ver.write(DEFAULT_GUN_VER_ANGLE);
     sleep_ms(300);
 
-    // Pętla główna (loop)
+    set_position(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
+}
+
+
+int main() {
+
+    setup();
+
     while (true) {
-        // 1. Wyczyszczenie pinu TRIG
-        gpio_put(TRIG_PIN, 0);
-        sleep_us(2);
+        float distance_cm = read_distance_cm();
+        printf("Zmierzona odległość: %.2f cm\n", distance_cm);
 
-        // 2. Wysłanie impulsu 10 mikrosekund
-        gpio_put(TRIG_PIN, 1);
-        sleep_us(10);
-        gpio_put(TRIG_PIN, 0);
+        write_distance_to_buffer(scanner_servo_pos, distance_cm);
+        // write_distance_to_map(scanner_servo_pos, distance_cm);
 
-        // 3. Odczyt czasu trwania sygnału (pulseIn)
-        uint64_t duration = get_pulse_width(ECHO_PIN);
+        AimPosition target_pos = get_position_to_target();
 
-        // 4. Obliczenie odległości
-        // 0.0343 cm/us
-        distance = (float)duration * 0.0343f / 2.0f;
-
-        // Wyświetlenie wyniku
-        printf("Zmierzona odległość: %.2f cm\n", distance);
-
-        // Logika LED
-        if (distance <= minimumRange || distance >= maximumRange) {
-            // W oryginalnym kodzie było println(distance) tutaj też, ale to redundantne
-            gpio_put(LED_PIN, 1);
-        } else {
-            gpio_put(LED_PIN, 0);
-        }
-
-        // Zapis do tablicy
-        int v_idx = pos_sensor_ver - MIN_VER_ANGLE;
-        int h_idx = pos_sensor_hor - MIN_HOR_ANGLE;
-        if (v_idx >= 0 && v_idx <= VER_SIZE-1 && h_idx >= 0 && h_idx <= HOR_SIZE-1) {
-            distanceMap[v_idx][h_idx] = distance;
-        }
-
-        // Szukanie celu
-        float min_dist = 10000.0f;
-        int target_v = -1;
-        int target_h = -1;
-
-        for (int v = 0; v <= VER_SIZE-1; v++) {
-            for (int h = 0; h <= HOR_SIZE-1; h++) {
-                float d = distanceMap[v][h];
-                if (d > minimumRange && d < maximumRange) {
-                    if (d < min_dist) {
-                        min_dist = d;
-                        target_v = v;
-                        target_h = h;
-                    }
-                }
-            }
-        }
-
-
-        if (target_v != -1 && target_h != -1) {
+        if (target_pos.HOR != -1 && target_pos.VER != -1) {
             // Wycelowanie
-            servo_gun_ver.write(target_v + MIN_VER_ANGLE);
-            servo_gun_hor.write(target_h + MIN_HOR_ANGLE);
-            
+            set_position(servo_gun_ver, servo_gun_hor, target_pos);
+
             // Wciśnięcie przycisku do strzału
             if (!gpio_get(BUTTON_PIN)) {
-                // Strzał
-                fire_at_target(target_v + MIN_VER_ANGLE, target_h + MIN_HOR_ANGLE);
-                printf("Strzał w cel na odległości: %.2f cm (ver: %d, hor: %d)\n", min_dist, target_v + MIN_VER_ANGLE, target_h + MIN_HOR_ANGLE);
+                printf("Strzał w cel na odległości: %.2f cm (ver: %d, hor: %d)\n", target_pos.DIST_CM, target_pos.VER, target_pos.HOR);
+                shoot();
             }
             sleep_ms(10);   // Ochrona przed debouncingiem
         }else {
-            servo_gun_ver.write(pos_gun_ver);
-            servo_gun_hor.write(pos_gun_hor);
+            set_position(servo_gun_ver, servo_gun_hor, gun_servo_pos);
             printf("Brak celu w zasięgu.\n");
         }
 
-        // Delay 500ms
-        //sleep_ms(500);
-
-        // Logika poruszania sensorem (losowe)
-        random_deg_pos(pos_sensor_ver, pos_sensor_hor);
-
-        // Logika poruszania sensorem (skanowanie 2D)
-        // bool move_vertical = false;
-
-        // if (horizontalDirection) {
-        //     pos_sensor_hor += 10;
-        //     if (pos_sensor_hor > 150) {
-        //         pos_sensor_hor = 150;
-        //         horizontalDirection = false;
-        //         move_vertical = true;
-        //     }
-        // } else {
-        //     pos_sensor_hor -= 10;
-        //     if (pos_sensor_hor < 30) {
-        //         pos_sensor_hor = 30;
-        //         horizontalDirection = true;
-        //         move_vertical = true;
-        //     }
-        // }
-
-        // if (move_vertical) {
-        //     if (verticalDirection) {
-        //         pos_sensor_ver += 10;
-        //         if (pos_sensor_ver > 120) {
-        //             pos_sensor_ver = 120;
-        //             verticalDirection = false;
-        //         }
-        //     } else {
-        //         pos_sensor_ver -= 10;
-        //         if (pos_sensor_ver < 80) {
-        //             pos_sensor_ver = 80;
-        //             verticalDirection = true;
-        //         }
-        //     }
-        // }
-
-        servo_sensor_hor.write(pos_sensor_hor);
-        servo_sensor_ver.write(pos_sensor_ver);
-
-        sleep_ms(15); // waits for the servo to reach the position
+        // random_scan_next_step(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
+        linear_scan_next_step(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
     }
     
     return 0;
+}
+
+
+
+void Servo::attach(uint gpio_pin) {
+    pin = gpio_pin;
+    gpio_set_function(pin, GPIO_FUNC_PWM);
+    slice_num = pwm_gpio_to_slice_num(pin);
+    channel = pwm_gpio_to_channel(pin);
+
+    // Konfiguracja PWM dla 50Hz (standard dla serw)
+    pwm_config config = pwm_get_default_config();
+    pwm_config_set_clkdiv(&config, 64.0f); // Zegar systemowy dzielony przez 64
+    pwm_config_set_wrap(&config, 39063);   // Ustawienie okresu na 20ms (50Hz)
+    pwm_init(slice_num, &config, true);
+}
+
+void Servo::write(int angle) {
+    if (angle < 0) angle = 0;
+    if (angle > 180) angle = 180;
+
+    // Mapowanie kąta (0-180) na szerokość impulsu (500us - 2500us)
+    // 500us to 0 stopni, 2500us to 180 stopni
+    float pulse_width_us = 500.0f + (angle / 180.0f) * 2000.0f;
+    
+    // Konwersja czasu na poziom PWM (zegar po podziale to ~1.95MHz)
+    uint16_t level = (uint16_t)(pulse_width_us * 1.953125f);
+    pwm_set_chan_level(slice_num, channel, level);
+}
+
+
+// This function uses the hardware to create a unique seed
+void seed_random_from_rosc() {
+    uint32_t random = 0;
+    volatile uint32_t *rnd_reg = (uint32_t *)(ROSC_BASE + ROSC_RANDOMBIT_OFFSET);
+    
+    // Mix bits from the hardware random generator
+    for (int i = 0; i < 32; i++) {
+        random = (random << 1) | (*rnd_reg & 1);
+    }
+    srand(random); // Initialize the standard random number generator
+}
+
+// Funkcja pomocnicza do odczytu czasu impulsu (zamiennik pulseIn)
+uint64_t get_pulse_width(uint pin) {
+    // Czekaj na stan wysoki (z timeoutem 100ms)
+    absolute_time_t timeout = make_timeout_time_ms(30);
+    while (gpio_get(pin) == 0) {
+        if (absolute_time_diff_us(get_absolute_time(), timeout) < 0) return 0;
+    }
+    absolute_time_t start_time = get_absolute_time();
+
+    // Czekaj na stan niski
+    while (gpio_get(pin) == 1) {
+        if (absolute_time_diff_us(get_absolute_time(), timeout) < 0) return 0;
+    }
+    absolute_time_t end_time = get_absolute_time();
+
+    return absolute_time_diff_us(start_time, end_time);
+}
+
+
+void set_position(Servo &servo_ver, Servo &servo_hor, const ServoPosition &position) {
+    servo_hor.write(position.HOR);
+    sleep_ms(50);
+    servo_ver.write(position.VER);
+    sleep_ms(50);
+}
+
+float read_distance_cm() {
+    // 1. Wyczyszczenie pinu TRIG
+    gpio_put(TRIG_PIN, 0);
+    sleep_us(2);
+
+    // 2. Wysłanie impulsu 10 mikrosekund
+    gpio_put(TRIG_PIN, 1);
+    sleep_us(10);
+    gpio_put(TRIG_PIN, 0);
+
+    // 3. Odczyt czasu trwania sygnału (pulseIn)
+    uint64_t duration = get_pulse_width(ECHO_PIN);
+
+    // 4. Obliczenie odległości
+    // 0.0343 cm/us
+    float distance_cm = (float)duration * 0.0343f / 2.0f;
+
+    led_on_if_in_range(distance_cm);
+
+    return distance_cm;
+}
+
+void led_on_if_in_range(float distance_cm){
+    if (MIN_SCANNER_DIST_CM <= distance_cm && distance_cm <= MAX_SCANNER_DIST_CM) {
+        gpio_put(LED_PIN, 1);
+    } else {
+        gpio_put(LED_PIN, 0);
+    }
+}
+
+void write_distance_to_buffer(const ServoPosition &scanner_servo, float distance_cm)
+{
+    static int buffer_index = 0;
+
+    if (MIN_SCANNER_DIST_CM <= distance_cm && distance_cm <= MAX_SCANNER_DIST_CM) {
+        scanBuffer[buffer_index].VER = scanner_servo.VER;
+        scanBuffer[buffer_index].HOR = scanner_servo.HOR;
+        scanBuffer[buffer_index].DIST_CM = distance_cm;
+        
+        buffer_index = (buffer_index + 1) % SCAN_BUFFER_SIZE;
+    }
+}
+
+void write_distance_to_map(const ServoPosition &scanner_servo, float distance_cm) {
+
+    if (MIN_SCANNER_DIST_CM <= distance_cm && distance_cm <= MAX_SCANNER_DIST_CM) {
+        int v_idx = scanner_servo.VER;
+        int h_idx = scanner_servo.HOR;
+        if (v_idx >= 0 && v_idx <= ROW_NUM-1 && h_idx >= 0 && h_idx <= COL_NUM-1) {
+            distanceMap[v_idx][h_idx] = distance_cm;
+        }
+    }
+}
+
+// ======== Ta wersja szuka celu w CAŁEJ mapie odległości ========
+// AimPosition get_position_to_target() {
+//         // Szukanie celu (najblizszy odczyt w tablicy)
+//         float min_dist = 10000.0f;
+//         int target_v = -1;
+//         int target_h = -1;
+
+//         for (int v = 0; v <= ROW_NUM-1; v++) {
+//             for (int h = 0; h <= COL_NUM-1; h++) {
+//                 float d = distanceMap[v][h];
+//                 if (d > MIN_SCANNER_DIST_CM && d < MAX_SCANNER_DIST_CM) {
+//                     if (d < min_dist) {
+//                         min_dist = d;
+//                         target_v = v;
+//                         target_h = h;
+//                     }
+//                 }
+//             }
+//         }
+
+//         return {target_v, target_h, min_dist};
+// }
+
+AimPosition get_position_to_target() {
+    // Szukanie celu (najblizszy odczyt w buforze)
+    float min_dist = 10000.0f;
+    int target_v = -1;
+    int target_h = -1;
+
+    for (int i = 0; i < SCAN_BUFFER_SIZE; i++) {
+        float d = scanBuffer[i].DIST_CM;
+        if (d < min_dist) {
+            min_dist = d;
+            target_v = scanBuffer[i].VER;
+            target_h = scanBuffer[i].HOR;
+        }
+    }
+
+    return {target_v, target_h, min_dist};
+}
+
+void shoot() {
+    // Symulacja strzału
+    gpio_put(LASER_PIN, 1);
+    gpio_put(BUZZER_PIN, 1);
+    sleep_ms(1000); // Czas trwania strzału
+    gpio_put(LASER_PIN, 0);
+    gpio_put(BUZZER_PIN, 0);
+}
+
+void random_deg_pos(ServoPosition &scanner_servo) {
+    scanner_servo.VER = rand() % (SCANNER_MAX_VER_ANGLE - SCANNER_MIN_VER_ANGLE + 1) + SCANNER_MIN_VER_ANGLE;
+    scanner_servo.HOR = rand() % (SCANNER_MAX_HOR_ANGLE - SCANNER_MIN_HOR_ANGLE + 1) + SCANNER_MIN_HOR_ANGLE;
+}
+
+void random_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo){
+    random_deg_pos(scanner_servo);
+    set_position(ver_servo, hor_servo, scanner_servo);
+}
+
+void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo) {
+    static bool horizontalDirection = false; // true - prawo, false - lewo
+    static bool verticalDirection = true;   // true - góra, false - dół
+    bool move_vertical = false;
+
+    if (horizontalDirection) {
+        scanner_servo.HOR += 10;
+        if (scanner_servo.HOR > SCANNER_MAX_HOR_ANGLE) {
+            scanner_servo.HOR = SCANNER_MAX_HOR_ANGLE;
+            horizontalDirection = false;
+            move_vertical = true;
+        }
+    } else {
+        scanner_servo.HOR -= 10;
+        if (scanner_servo.HOR < SCANNER_MIN_HOR_ANGLE) {
+            scanner_servo.HOR = SCANNER_MIN_HOR_ANGLE;
+            horizontalDirection = true;
+            move_vertical = true;
+        }
+    }
+
+    if (move_vertical) {
+        if (verticalDirection) {
+            scanner_servo.VER += 10;
+            if (scanner_servo.VER > SCANNER_MAX_VER_ANGLE) {
+                scanner_servo.VER = SCANNER_MAX_VER_ANGLE;
+                verticalDirection = false;
+            }
+        } else {
+            scanner_servo.VER -= 10;
+            if (scanner_servo.VER < SCANNER_MIN_VER_ANGLE) {
+                scanner_servo.VER = SCANNER_MIN_VER_ANGLE;
+                verticalDirection = true;
+            }
+        }
+    }
+
+    set_position(ver_servo, hor_servo, scanner_servo);
 }
