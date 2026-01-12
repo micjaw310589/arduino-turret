@@ -6,6 +6,8 @@
 #include "hardware/clocks.h"
 #include "hardware/structs/rosc.h"
 
+constexpr int _PI = 3.14159265f;
+
 // Definicje Pinów
 constexpr int ECHO_PIN = 6;
 constexpr int TRIG_PIN = 7;
@@ -25,12 +27,12 @@ constexpr float MIN_SCANNER_DIST_CM = 20.0f;
 // Zakresy ruchu serw
 constexpr int SCANNER_MIN_HOR_ANGLE = 30;
 constexpr int SCANNER_MAX_HOR_ANGLE = 150;
-constexpr int SCANNER_MIN_VER_ANGLE = 80;
-constexpr int SCANNER_MAX_VER_ANGLE = 120;
-constexpr int GUN_MIN_HOR_ANGLE = 30;
-constexpr int GUN_MAX_HOR_ANGLE = 150;
-constexpr int GUN_MIN_VER_ANGLE = 80;
-constexpr int GUN_MAX_VER_ANGLE = 120;
+constexpr int SCANNER_MIN_VER_ANGLE = 90;
+constexpr int SCANNER_MAX_VER_ANGLE = 130;
+constexpr int GUN_MIN_HOR_ANGLE = 0;
+constexpr int GUN_MAX_HOR_ANGLE = 180;
+constexpr int GUN_MIN_VER_ANGLE = 0;
+constexpr int GUN_MAX_VER_ANGLE = 180;
 
 // Domyślne nastawy serw
 constexpr int DEFAULT_SCANNER_HOR_ANGLE = 90;
@@ -70,7 +72,7 @@ struct AimPosition : ServoPosition {
 };
 
 // Pamięć odczytów -- bufor cykliczny
-constexpr int SCAN_BUFFER_SIZE = 20;
+constexpr int SCAN_BUFFER_SIZE = 10;
 AimPosition scanBuffer[SCAN_BUFFER_SIZE] = {-1, -1, 999999.0f};
 
 void seed_random_from_rosc();
@@ -246,18 +248,18 @@ uint64_t get_pulse_width(uint pin) {
 
 
 ServoPosition parallax_correction(const AimPosition &target_scanner) {
-    constexpr float X_OFFSET_MM = 0.0f; 
-    constexpr float Y_OFFSET_MM = 119.5f;
+    constexpr float X_OFFSET_MM = 0.0f;
+    constexpr float Y_OFFSET_MM = -119.5f;
     constexpr float Z_OFFSET_MM = -18.75f;
 
     float dist_mm = target_scanner.DIST_CM * 10.0f;
-    float alpha_rad = (target_scanner.HOR - DEFAULT_SCANNER_HOR_ANGLE) * 3.14159265f / 180.0f;    // pan (left/right)
-    float beta_rad = (target_scanner.VER - DEFAULT_SCANNER_VER_ANGLE) * 3.14159265f / 180.0f;     // tilt (up/down)
+    float alpha_rad = (target_scanner.HOR - DEFAULT_SCANNER_HOR_ANGLE) * _PI / 180.0f;    // pan (left/right)
+    float beta_rad = (target_scanner.VER - DEFAULT_SCANNER_VER_ANGLE) * _PI / 180.0f;     // tilt (up/down)
 
     // XYZ position from scanner origin
-    float x_s = dist_mm * sinf(beta_rad) * cosf(alpha_rad);
-    float y_s = dist_mm * sinf(beta_rad) * sinf(alpha_rad);
-    float z_s = dist_mm * cosf(beta_rad);
+    float x_s = dist_mm * cosf(beta_rad) * cosf(alpha_rad);
+    float y_s = dist_mm * cosf(beta_rad) * sinf(alpha_rad);
+    float z_s = dist_mm * sinf(beta_rad);
 
     // // XYZ position from gun origin
     float x_g = x_s + X_OFFSET_MM;
@@ -265,13 +267,15 @@ ServoPosition parallax_correction(const AimPosition &target_scanner) {
     float z_g = z_s + Z_OFFSET_MM;
 
     // Recalculate angles for gun
-    float dist_g = sqrtf(x_g * x_g + y_g * y_g + z_g * z_g);
+    // float dist_g = sqrtf(x_g * x_g + y_g * y_g + z_g * z_g);
+    // float alpha_g_rad = atan2f(y_g, x_g);
+    // float beta_g_rad = acosf(z_g / dist_g);
     float alpha_g_rad = atan2f(y_g, x_g);
-    float beta_g_rad = acosf(z_g / dist_g);
+    float beta_g_rad = atan2f(z_g, sqrtf(x_g * x_g + y_g * y_g));
 
     // Convert back to degrees
-    float alpha_g_deg = alpha_g_rad * 180.0f / 3.14159265f;
-    float beta_g_deg = beta_g_rad * 180.0f / 3.14159265f;
+    float alpha_g_deg = alpha_g_rad * 180.0f / _PI;
+    float beta_g_deg = beta_g_rad * 180.0f / _PI;
 
     int gun_hor_angle = static_cast<int>(alpha_g_deg + DEFAULT_GUN_HOR_ANGLE);
     int gun_ver_angle = static_cast<int>(beta_g_deg + DEFAULT_GUN_VER_ANGLE);
@@ -282,9 +286,9 @@ ServoPosition parallax_correction(const AimPosition &target_scanner) {
 
 void set_position(Servo &servo_ver, Servo &servo_hor, const ServoPosition &position) {
     servo_hor.write(position.HOR);
-    sleep_ms(30);
+    sleep_ms(50);
     servo_ver.write(position.VER);
-    sleep_ms(30);
+    sleep_ms(50);
 }
 
 float read_distance_cm() {
@@ -366,20 +370,18 @@ void write_distance_to_map(const ServoPosition &scanner_servo, float distance_cm
 
 AimPosition get_position_to_target() {
     // Szukanie celu (najblizszy odczyt w buforze)
-    float min_dist = 10000.0f;
-    int target_v = -1;
-    int target_h = -1;
+    AimPosition target_pos = {-1, -1, 10000.0f};
 
     for (int i = 0; i < SCAN_BUFFER_SIZE; i++) {
         float d = scanBuffer[i].DIST_CM;
-        if (d < min_dist) {
-            min_dist = d;
-            target_v = scanBuffer[i].VER;
-            target_h = scanBuffer[i].HOR;
+        if (d < target_pos.DIST_CM) {
+            target_pos.DIST_CM = d;
+            target_pos.VER = scanBuffer[i].VER;
+            target_pos.HOR = scanBuffer[i].HOR;
         }
     }
 
-    return {target_v, target_h, min_dist};
+    return target_pos;
 }
 
 void shoot() {
@@ -407,14 +409,14 @@ void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &sc
     bool move_vertical = false;
 
     if (horizontalDirection) {
-        scanner_servo.HOR += 10;
+        scanner_servo.HOR += 20;
         if (scanner_servo.HOR > SCANNER_MAX_HOR_ANGLE) {
             scanner_servo.HOR = SCANNER_MAX_HOR_ANGLE;
             horizontalDirection = false;
             move_vertical = true;
         }
     } else {
-        scanner_servo.HOR -= 10;
+        scanner_servo.HOR -= 20;
         if (scanner_servo.HOR < SCANNER_MIN_HOR_ANGLE) {
             scanner_servo.HOR = SCANNER_MIN_HOR_ANGLE;
             horizontalDirection = true;
@@ -424,13 +426,13 @@ void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &sc
 
     if (move_vertical) {
         if (verticalDirection) {
-            scanner_servo.VER += 10;
+            scanner_servo.VER += 20;
             if (scanner_servo.VER > SCANNER_MAX_VER_ANGLE) {
                 scanner_servo.VER = SCANNER_MAX_VER_ANGLE;
                 verticalDirection = false;
             }
         } else {
-            scanner_servo.VER -= 10;
+            scanner_servo.VER -= 20;
             if (scanner_servo.VER < SCANNER_MIN_VER_ANGLE) {
                 scanner_servo.VER = SCANNER_MIN_VER_ANGLE;
                 verticalDirection = true;
