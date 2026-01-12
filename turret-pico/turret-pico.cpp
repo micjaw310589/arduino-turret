@@ -70,7 +70,7 @@ struct AimPosition : ServoPosition {
 };
 
 // Pamięć odczytów -- bufor cykliczny
-constexpr int SCAN_BUFFER_SIZE = 10;
+constexpr int SCAN_BUFFER_SIZE = 20;
 AimPosition scanBuffer[SCAN_BUFFER_SIZE] = {-1, -1, 999999.0f};
 
 void seed_random_from_rosc();
@@ -141,7 +141,7 @@ void setup() {
     servo_gun_hor.write(DEFAULT_GUN_HOR_ANGLE);
     sleep_ms(300);
     servo_gun_ver.write(DEFAULT_GUN_VER_ANGLE);
-    sleep_ms(300);
+    sleep_ms(1000);
 
     set_position(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
 }
@@ -160,9 +160,11 @@ int main() {
 
         AimPosition target_pos = get_position_to_target();
 
-        if (target_pos.HOR != -1 && target_pos.VER != -1) {
+        if (target_pos.HOR > 0 && target_pos.VER > 0) {
             // Wycelowanie
             ServoPosition target_for_gun = parallax_correction(target_pos);
+            // ServoPosition target_for_gun = target_pos;
+            printf("Ustawianie pozycji serwa na VER: %d, HOR: %d\n", target_for_gun.VER, target_for_gun.HOR);
             set_position(servo_gun_ver, servo_gun_hor, target_for_gun);
 
             // Wciśnięcie przycisku do strzału
@@ -253,11 +255,11 @@ ServoPosition parallax_correction(const AimPosition &target_scanner) {
     float beta_rad = (target_scanner.VER - DEFAULT_SCANNER_VER_ANGLE) * 3.14159265f / 180.0f;     // tilt (up/down)
 
     // XYZ position from scanner origin
-    float x_s = dist_mm * cosf(beta_rad) * cosf(alpha_rad);
-    float y_s = dist_mm * cosf(beta_rad) * sinf(alpha_rad);
-    float z_s = dist_mm * sinf(beta_rad);
+    float x_s = dist_mm * sinf(beta_rad) * cosf(alpha_rad);
+    float y_s = dist_mm * sinf(beta_rad) * sinf(alpha_rad);
+    float z_s = dist_mm * cosf(beta_rad);
 
-    // XYZ position from gun origin
+    // // XYZ position from gun origin
     float x_g = x_s + X_OFFSET_MM;
     float y_g = y_s + Y_OFFSET_MM;
     float z_g = z_s + Z_OFFSET_MM;
@@ -280,9 +282,9 @@ ServoPosition parallax_correction(const AimPosition &target_scanner) {
 
 void set_position(Servo &servo_ver, Servo &servo_hor, const ServoPosition &position) {
     servo_hor.write(position.HOR);
-    sleep_ms(50);
+    sleep_ms(30);
     servo_ver.write(position.VER);
-    sleep_ms(50);
+    sleep_ms(30);
 }
 
 float read_distance_cm() {
