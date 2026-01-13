@@ -5,8 +5,8 @@ import sys
 import math
 
 # === KONFIGURACJA PORTU BLUETOOTH ===
-PORT = "COM5" # Zmień na swój port Bluetooth
-BAUDRATE = 9600
+PORT = "COM1" # Zmień na swój port Bluetooth
+BAUDRATE = 115200
 TIMEOUT = 1
 
 # Bufory danych
@@ -34,21 +34,23 @@ def read_serial_data():
     except (ValueError, UnicodeDecodeError):
         return None, None, None
 def update(frame):
+    
      """Aktualizacja wykresów."""
      plane, angle, distance = read_serial_data()
      if plane and angle is not None and distance is not None:
          if plane == 'H':
              angles_h.append(angle)
              distances_h.append(distance)
-             if len(angles_h) > 360:
+             if len(angles_h) > 20:
                  angles_h.pop(0)
                  distances_h.pop(0)
          elif plane == 'V':
              angles_v.append(angle)
              distances_v.append(distance)
-             if len(angles_v) > 360:
+             if len(angles_v) > 20:
                  angles_v.pop(0)
                  distances_v.pop(0)
+                 
      # Wykres poziomy
      ax1.clear()
      ax1.set_title("Radar poziomy")
@@ -56,6 +58,7 @@ def update(frame):
      ax1.set_theta_direction(-1) # zgodnie z ruchem wskazówek zegara
      ax1.grid(True)
      ax1.plot([math.radians(a) for a in angles_h], distances_h, marker='o', color='b')
+     
      # Wykres pionowy (obrócony o 90°)
      ax2.clear()
      ax2.set_title("Radar pionowy")
@@ -63,6 +66,7 @@ def update(frame):
      ax2.set_theta_direction(-1)
      ax2.grid(True)
      ax2.plot([math.radians(a) for a in angles_v], distances_v, marker='o', color='r')
+     
 # === Inicjalizacja połączenia ===
 try:
     ser = serial.Serial(PORT, BAUDRATE, timeout=TIMEOUT)
@@ -70,6 +74,7 @@ try:
 except serial.SerialException as e:
     print(f"Błąd połączenia z portem szeregowym: {e}")
     sys.exit(1)
+    
 # === Przygotowanie wykresów ===
 fig = plt.figure(figsize=(10, 5))
 ax1 = fig.add_subplot(1, 2, 1, projection='polar')
