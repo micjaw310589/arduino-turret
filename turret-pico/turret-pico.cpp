@@ -1,11 +1,24 @@
 #include <stdio.h>
 #include <random>
 #include "pico/stdlib.h"
+#include "pico/cyw43_arch.h"
+#include "lwip/pbuf.h"
+#include "lwip/udp.h"
 #include "hardware/pwm.h"
 #include "hardware/gpio.h"
 #include "hardware/clocks.h"
 #include "hardware/structs/rosc.h"
 
+// ================= KONFIGURACJA ACCESS POINT =================
+const char AP_SSID[] = "TURRET_PICO_AP";
+const char AP_PASSWORD[] = "minion123"; // Min. 8 znaków
+#define UDP_PORT 4444
+// Adres rozgłoszeniowy w naszej podsieci (dla IP 192.168.4.1)
+#define UDP_TARGET_IP "192.168.4.255"
+
+struct udp_pcb *udp_sock;
+
+// ================= DEFINICJE =================
 constexpr int _PI = 3.14159265f;
 
 // Definicje Pinów
@@ -40,11 +53,6 @@ constexpr int DEFAULT_SCANNER_VER_ANGLE = 90;
 constexpr int DEFAULT_GUN_HOR_ANGLE = 90;
 constexpr int DEFAULT_GUN_VER_ANGLE = 90;
 
-// Mapa odległości [ver][hor] dla kątów nastawu serw skanera
-constexpr int ROW_NUM = 181;
-constexpr int COL_NUM = 181;
-float distanceMap[ROW_NUM][COL_NUM] = {999999.0f};
-
 
 // Deklaracje funkcji i klas
 class Servo {
@@ -60,11 +68,6 @@ public:
 struct ServoPosition {
     int VER;
     int HOR;
-
-    bool isWithinAngleRange() {
-        return (VER >= GUN_MIN_VER_ANGLE && VER <= GUN_MAX_VER_ANGLE &&
-                HOR >= GUN_MIN_HOR_ANGLE && HOR <= GUN_MAX_HOR_ANGLE);
-    }
 };
 
 struct AimPosition : ServoPosition {
@@ -78,18 +81,21 @@ AimPosition scanBuffer[SCAN_BUFFER_SIZE] = {-1, -1, 999999.0f};
 void seed_random_from_rosc();
 uint64_t get_pulse_width(uint pin);
 
-ServoPosition parallax_correction(const AimPosition &target_pos);
+AimPosition parallax_correction(const AimPosition &target_pos);
 
 void set_position(Servo &servo_ver, Servo &servo_hor, const ServoPosition &position);
 float read_distance_cm();
 void led_on_if_in_range(float distance_cm);
-void write_distance_to_buffer(const ServoPosition &scanner_servo, float distance_cm);
-void write_distance_to_map(const ServoPosition &scanner_servo, float distance_cm);
+void write_distance_to_buffer(const ServoPosition &scanner_servo, const float distance_cm);
 AimPosition get_position_to_target();
 void shoot();
 void random_deg_pos(ServoPosition &scanner_servo);
 void random_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo);
 void linear_scan_next_step(Servo &ver_servo, Servo &hor_servo, ServoPosition &scanner_servo);
+
+// Funkcje sieciowe
+void setup_wifi_ap();
+void udp_printf(const char *format, ...);
 
 // Globalne obiekty serw
 Servo servo_scanner_hor;
@@ -98,7 +104,6 @@ Servo servo_gun_hor;
 Servo servo_gun_ver;
 
 // Pozycje serw
-// constexpr ServoPosition scanner_start_pos = {SCANNER_MIN_VER_ANGLE, SCANNER_MAX_HOR_ANGLE};
 ServoPosition scanner_servo_pos = {SCANNER_MIN_VER_ANGLE, SCANNER_MAX_HOR_ANGLE};
 ServoPosition gun_servo_pos = {DEFAULT_GUN_VER_ANGLE, DEFAULT_GUN_HOR_ANGLE};
 
@@ -106,6 +111,8 @@ ServoPosition gun_servo_pos = {DEFAULT_GUN_VER_ANGLE, DEFAULT_GUN_HOR_ANGLE};
 void setup() {
     // Inicjalizacja Serial (USB)
     stdio_init_all();
+    
+    setup_wifi_ap();
 
     // Inicjalizacja rng
     seed_random_from_rosc();
@@ -146,6 +153,8 @@ void setup() {
     sleep_ms(1000);
 
     set_position(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
+
+    udp_printf("TURRET AP MODE STARTED. IP: 192.168.4.1\n");
 }
 
 
@@ -155,38 +164,87 @@ int main() {
 
     while (true) {
         float distance_cm = read_distance_cm();
-        printf("Zmierzona odległość: %.2f cm\n", distance_cm);
+        // printf("Zmierzona odległość: %.2f cm\n", distance_cm);
 
         write_distance_to_buffer(scanner_servo_pos, distance_cm);
-        // write_distance_to_map(scanner_servo_pos, distance_cm);
+        udp_printf("h,%d,%.2f\n", scanner_servo_pos.HOR, distance_cm);
+        udp_printf("v,%d,%.2f\n", scanner_servo_pos.VER, distance_cm);
 
         AimPosition target_pos = get_position_to_target();
 
         if (target_pos.HOR > 0 && target_pos.VER > 0) {
             // Wycelowanie
-            ServoPosition target_for_gun = parallax_correction(target_pos);
-            // ServoPosition target_for_gun = target_pos;
-            printf("Ustawianie pozycji serwa na VER: %d, HOR: %d\n", target_for_gun.VER, target_for_gun.HOR);
-            set_position(servo_gun_ver, servo_gun_hor, target_for_gun);
+            target_pos = parallax_correction(target_pos);
+            set_position(servo_gun_ver, servo_gun_hor, target_pos);
+            udp_printf("H,%d,%.2f\n", target_pos.HOR, target_pos.DIST_CM);
+            udp_printf("V,%d,%.2f\n", target_pos.VER, target_pos.DIST_CM);
 
             // Wciśnięcie przycisku do strzału
             if (!gpio_get(BUTTON_PIN)) {
-                printf("Strzał w cel na odległości: %.2f cm (ver: %d, hor: %d)\n", target_pos.DIST_CM, target_pos.VER, target_pos.HOR);
+                udp_printf("S\n");
                 shoot();
             }
             sleep_ms(10);   // Ochrona przed debouncingiem
         }else {
             set_position(servo_gun_ver, servo_gun_hor, gun_servo_pos);
-            printf("Brak celu w zasięgu.\n");
+            // printf("Brak celu w zasięgu.\n");
         }
 
-        // random_scan_next_step(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
         linear_scan_next_step(servo_scanner_ver, servo_scanner_hor, scanner_servo_pos);
     }
     
     return 0;
 }
 
+
+void setup_wifi_ap() {
+    if (cyw43_arch_init()) {
+        printf("WiFi init failed!\n");
+        return;
+    }
+
+    cyw43_arch_enable_ap_mode(AP_SSID, AP_PASSWORD, CYW43_AUTH_WPA2_AES_PSK);
+
+    // Konfiguracja adresu IP dla Pico
+    ip4_addr_t ip, mask, gw;
+    IP4_ADDR(&ip, 192, 168, 4, 1);
+    IP4_ADDR(&mask, 255, 255, 255, 0);
+    IP4_ADDR(&gw, 192, 168, 4, 1);
+
+    netif_set_addr(netif_default, &ip, &mask, &gw);
+    netif_set_up(netif_default);
+
+    printf("AP Started: %s\n", AP_SSID);
+    printf("IP Address: %s\n", ip4addr_ntoa(&ip));
+
+    // Konfiguracja gniazda UDP do nadawania
+    udp_sock = udp_new();
+    if (udp_sock) {
+        ip_addr_t broadcast_addr;
+        ipaddr_aton(UDP_TARGET_IP, &broadcast_addr);
+        udp_connect(udp_sock, &broadcast_addr, UDP_PORT);
+    }
+}
+
+void udp_printf(const char *format, ...) {
+    char buffer[128];
+    va_list args;
+    va_start(args, format);
+    int len = vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    if (len > 0) {
+        printf("%s", buffer); // Wyjście na USB
+        if (udp_sock) {
+            struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, len, PBUF_RAM);
+            if (p) {
+                memcpy(p->payload, buffer, len);
+                udp_send(udp_sock, p);
+                pbuf_free(p);
+            }
+        }
+    }
+}
 
 
 void Servo::attach(uint gpio_pin) {
@@ -247,7 +305,7 @@ uint64_t get_pulse_width(uint pin) {
 }
 
 
-ServoPosition parallax_correction(const AimPosition &target_scanner) {
+AimPosition parallax_correction(const AimPosition &target_scanner) {
     constexpr float X_OFFSET_MM = 0.0f;
     constexpr float Y_OFFSET_MM = -119.5f;
     constexpr float Z_OFFSET_MM = -18.75f;
@@ -267,9 +325,7 @@ ServoPosition parallax_correction(const AimPosition &target_scanner) {
     float z_g = z_s + Z_OFFSET_MM;
 
     // Recalculate angles for gun
-    // float dist_g = sqrtf(x_g * x_g + y_g * y_g + z_g * z_g);
-    // float alpha_g_rad = atan2f(y_g, x_g);
-    // float beta_g_rad = acosf(z_g / dist_g);
+    float dist_g = sqrtf(x_g * x_g + y_g * y_g + z_g * z_g);
     float alpha_g_rad = atan2f(y_g, x_g);
     float beta_g_rad = atan2f(z_g, sqrtf(x_g * x_g + y_g * y_g));
 
@@ -277,10 +333,12 @@ ServoPosition parallax_correction(const AimPosition &target_scanner) {
     float alpha_g_deg = alpha_g_rad * 180.0f / _PI;
     float beta_g_deg = beta_g_rad * 180.0f / _PI;
 
+    float dist_g_cm = dist_g / 10.0f;
+
     int gun_hor_angle = static_cast<int>(alpha_g_deg + DEFAULT_GUN_HOR_ANGLE);
     int gun_ver_angle = static_cast<int>(beta_g_deg + DEFAULT_GUN_VER_ANGLE);
 
-    return {gun_ver_angle, gun_hor_angle};
+    return {gun_ver_angle, gun_hor_angle, dist_g_cm};
 }
 
 
@@ -321,7 +379,7 @@ void led_on_if_in_range(float distance_cm){
     }
 }
 
-void write_distance_to_buffer(const ServoPosition &scanner_servo, float distance_cm)
+void write_distance_to_buffer(const ServoPosition &scanner_servo, const float distance_cm)
 {
     static int buffer_index = 0;
 
@@ -331,17 +389,6 @@ void write_distance_to_buffer(const ServoPosition &scanner_servo, float distance
         scanBuffer[buffer_index].DIST_CM = distance_cm;
         
         buffer_index = (buffer_index + 1) % SCAN_BUFFER_SIZE;
-    }
-}
-
-void write_distance_to_map(const ServoPosition &scanner_servo, float distance_cm) {
-
-    if (MIN_SCANNER_DIST_CM <= distance_cm && distance_cm <= MAX_SCANNER_DIST_CM) {
-        int v_idx = scanner_servo.VER;
-        int h_idx = scanner_servo.HOR;
-        if (v_idx >= 0 && v_idx <= ROW_NUM-1 && h_idx >= 0 && h_idx <= COL_NUM-1) {
-            distanceMap[v_idx][h_idx] = distance_cm;
-        }
     }
 }
 

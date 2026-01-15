@@ -47,12 +47,14 @@ pico_enable_stdio_usb(turret-pico 1)
 # Add the standard library to the build
 target_link_libraries(turret-pico
         pico_stdlib
-        hardware_pwm)
+        hardware_pwm
+        hardware_adc
+        pico_cyw43_arch_lwip_threadsafe_background)
 
 # Add the standard include files to the build
 target_include_directories(turret-pico PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
+        ${CMAKE_CURRENT_LIST_DIR}/..
 )
 
 pico_add_extra_outputs(turret-pico)
-
