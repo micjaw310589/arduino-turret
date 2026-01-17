@@ -7,14 +7,13 @@ import threading
 from collections import deque
 
 # === KONFIGURACJA SIECIOWA ===
-# 0.0.0.0 oznacza, że komputer nasłuchuje na wszystkich swoich interfejsach
-# (zarówno Wi-Fi połączonym z Pico, jak i innych).
+# Adres 0.0.0.0 - komputer nasłuchuje na wszystkich swoich interfejsach
 UDP_IP = "0.0.0.0"
 UDP_PORT = 4444
 
 MAX_POINTS = 10   # Długość śladu ruchu
-MAX_SCAN_POINTS = 10 # Dłuższy ślad dla skanera (tło)
-MAX_SHOTS = 1     # Ile ostatnich strzałów pokazywać
+MAX_SCAN_POINTS = 10 # Długość śladu dla skanera (tło)
+MAX_SHOTS = 1     # Ilość zapamiętanych strzałów
 
 # === BUFORY DANYCH ===
 # Ślady ruchu (niebieskie kropki)
@@ -42,16 +41,16 @@ last_pos_v = (0.0, 0.0)
 running = True
 
 def read_udp_thread():
-    """Wątek odczytu: nasłuchuje pakietów UDP."""
+    # Wątek odczytu: nasłuchuje pakietów UDP
     global last_pos_h, last_pos_v
     
     # Utworzenie gniazda UDP
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     try:
-        # Bindowanie do portu - tutaj system operacyjny zaczyna nasłuchiwać
+        # Początek nasłuchiwania
         sock.bind((UDP_IP, UDP_PORT))
-        sock.settimeout(1.0) # Timeout żeby wątek mógł się zamknąć w razie końca programu
+        sock.settimeout(1.0) # Timeout na wypadek zakończenia programu
         print(f"Nasłuchiwanie UDP na porcie {UDP_PORT}...")
     except Exception as e:
         print(f"Błąd uruchamiania gniazda sieciowego: {e}")
@@ -62,9 +61,7 @@ def read_udp_thread():
             # Odbiór danych (bufor 1024 bajty)
             data, addr = sock.recvfrom(1024)
             message = data.decode('utf-8').strip()
-            
-            # Czasami w jednym pakiecie może przyjść kilka linii, 
-            # więc dzielimy po znaku nowej linii
+
             lines = message.split('\n')
 
             for line in lines:
@@ -73,7 +70,6 @@ def read_udp_thread():
                     continue
                 
                 # --- OBSŁUGA STRZAŁU ---
-                # Obsługuje zarówno 'S' (stary kod) jak i 'SHOT' (nowy kod AP)
                 if line == 'S':
                     print(f"!!! STRZAŁ !!! [od {addr[0]}]") 
                     shots_h_ang.append(last_pos_h[0])
@@ -93,16 +89,16 @@ def read_udp_thread():
                     angle_raw = float(parts[1])
                     distance = float(parts[2])
                     
-                    # Logika przeliczania kąta (zostawiona z oryginału)
+                    # Logika przeliczania kąta
                     angle = math.radians((angle_raw - 90)*-1) 
                 except ValueError:
                     continue
 
-                if plane == 'H':
+                if plane == 'H':      # Ruch Poziom
                     angles_h.append(angle)
                     distances_h.append(distance)
                     last_pos_h = (angle, distance)
-                elif plane == 'V':
+                elif plane == 'V':    # Ruch Pion
                     angles_v.append(angle)
                     distances_v.append(distance)
                     last_pos_v = (angle, distance)
@@ -116,7 +112,6 @@ def read_udp_thread():
                     scan_v_dist.append(distance)
 
         except socket.timeout:
-            # Brak danych w ciągu 1 sekundy - ponawiamy pętlę
             continue
         except Exception as e:
             print(f"Błąd odczytu danych: {e}")
@@ -125,7 +120,7 @@ def read_udp_thread():
     sock.close()
 
 def update(frame):
-    """Aktualizuje wykresy ruchu i strzałów."""
+    # Aktualizacja wykresów ruchu i strzałów
     
     scan_line_h.set_xdata(scan_h_ang)
     scan_line_h.set_ydata(scan_h_dist)
@@ -173,7 +168,7 @@ scan_line_v, = ax2.plot([], [], 'bo-', color='#705749', alpha=0.7, zorder=1, mar
 line_v, = ax2.plot([], [], 'ro-', markersize=3, zorder=2, linewidth=1, color='blue')
 shot_plot_v, = ax2.plot([], [], 'r*', markersize=15, zorder=3, linestyle='None')
 
-# Uruchomienie wątku UDP zamiast Serial
+# Uruchomienie wątku UDP
 thread = threading.Thread(target=read_udp_thread, daemon=True)
 thread.start()
 
