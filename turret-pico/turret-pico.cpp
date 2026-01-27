@@ -269,7 +269,7 @@ void Servo::write(int angle) {
     float pulse_width_us = 500.0f + (angle / 180.0f) * 2000.0f;
     
     // Konwersja czasu na poziom PWM (zegar po podziale to ~1.95MHz)
-    uint16_t level = (uint16_t)(pulse_width_us * 1.953125f);
+    uint16_t level = (uint16_t)(pulse_width_us * 2.34375f);
     pwm_set_chan_level(slice_num, channel, level);
 }
 
