@@ -256,7 +256,7 @@ void Servo::attach(uint gpio_pin) {
     // Konfiguracja PWM dla 50Hz (standard dla serw)
     pwm_config config = pwm_get_default_config();
     pwm_config_set_clkdiv(&config, 64.0f); // Zegar systemowy dzielony przez 64
-    pwm_config_set_wrap(&config, 39063);   // Ustawienie okresu na 20ms (50Hz)
+    pwm_config_set_wrap(&config, 46875);   // Ustawienie okresu na 20ms (50Hz)
     pwm_init(slice_num, &config, true);
 }
 
