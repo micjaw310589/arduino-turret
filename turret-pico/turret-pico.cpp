@@ -38,20 +38,20 @@ constexpr float MAX_SCANNER_DIST_CM = 200.0f;
 constexpr float MIN_SCANNER_DIST_CM = 20.0f;
 
 // Zakresy ruchu serw
-constexpr int SCANNER_MIN_HOR_ANGLE = 30;
-constexpr int SCANNER_MAX_HOR_ANGLE = 150;
-constexpr int SCANNER_MIN_VER_ANGLE = 90;
-constexpr int SCANNER_MAX_VER_ANGLE = 130;
+constexpr int SCANNER_MIN_HOR_ANGLE = 13;
+constexpr int SCANNER_MAX_HOR_ANGLE = 133;
+constexpr int SCANNER_MIN_VER_ANGLE = 70;
+constexpr int SCANNER_MAX_VER_ANGLE = 110;
 constexpr int GUN_MIN_HOR_ANGLE = 0;
 constexpr int GUN_MAX_HOR_ANGLE = 180;
 constexpr int GUN_MIN_VER_ANGLE = 0;
 constexpr int GUN_MAX_VER_ANGLE = 180;
 
 // Domyślne nastawy serw
-constexpr int DEFAULT_SCANNER_HOR_ANGLE = 90;
-constexpr int DEFAULT_SCANNER_VER_ANGLE = 90;
-constexpr int DEFAULT_GUN_HOR_ANGLE = 90;
-constexpr int DEFAULT_GUN_VER_ANGLE = 90;
+constexpr int DEFAULT_SCANNER_HOR_ANGLE = 73;
+constexpr int DEFAULT_SCANNER_VER_ANGLE = 70;
+constexpr int DEFAULT_GUN_HOR_ANGLE = 65;
+constexpr int DEFAULT_GUN_VER_ANGLE = 70;
 
 
 // Deklaracje funkcji i klas
@@ -178,6 +178,7 @@ int main() {
             set_position(servo_gun_ver, servo_gun_hor, target_pos);
             udp_printf("H,%d,%.2f\n", target_pos.HOR, target_pos.DIST_CM);
             udp_printf("V,%d,%.2f\n", target_pos.VER, target_pos.DIST_CM);
+            printf("Cel w zasięgu! Hor: %d, Ver: %d, Dist: %.2f cm\n", target_pos.HOR, target_pos.VER, target_pos.DIST_CM);
 
             // Wciśnięcie przycisku do strzału
             if (!gpio_get(BUTTON_PIN)) {
