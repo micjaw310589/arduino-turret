@@ -15,6 +15,21 @@ MAX_POINTS = 10   # Długość śladu ruchu
 MAX_SCAN_POINTS = 10 # Długość śladu dla skanera (tło)
 MAX_SHOTS = 1     # Ilość zapamiętanych strzałów
 
+# === ZAKRESY RUCHU ===
+SCANNER_MIN_HOR_ANGLE = 13
+SCANNER_MAX_HOR_ANGLE = 133
+SCANNER_MIN_VER_ANGLE = 70
+SCANNER_MAX_VER_ANGLE = 110
+GUN_MIN_HOR_ANGLE = 0
+GUN_MAX_HOR_ANGLE = 180
+GUN_MIN_VER_ANGLE = 0
+GUN_MAX_VER_ANGLE = 180
+# === KĄTY DOMYŚLNE ===
+DEFAULT_SCANNER_HOR_ANGLE = 73
+DEFAULT_SCANNER_VER_ANGLE = 70
+DEFAULT_GUN_HOR_ANGLE = 65
+DEFAULT_GUN_VER_ANGLE = 70
+
 # === BUFORY DANYCH ===
 # Ślady ruchu (niebieskie kropki)
 angles_h = deque(maxlen=MAX_POINTS)
@@ -89,8 +104,15 @@ def read_udp_thread():
                     angle_raw = float(parts[1])
                     distance = float(parts[2])
                     
+                    if plane == 'H' or plane == 'h':      # Ruch Poziom
+                        # Logika przeliczania kąta
+                        angle = math.radians((angle_raw - DEFAULT_SCANNER_HOR_ANGLE)*-1) 
+                    elif plane == 'V' or plane == 'v':    # Ruch Pion
+                        # Logika przeliczania kąta
+                        angle = math.radians((angle_raw - DEFAULT_SCANNER_VER_ANGLE)*-1)
+
                     # Logika przeliczania kąta
-                    angle = math.radians((angle_raw - 90)*-1) 
+                    #angle = math.radians((angle_raw - 90)*-1) 
                 except ValueError:
                     continue
 
